@@ -257,6 +257,7 @@ h1 {
 /* Four across leaves no room for their words, so four sit two by two. */
 #over .pair:has(> .btn:not([hidden]) ~ .btn:not([hidden]) ~ .btn:not([hidden]) ~ .btn:not([hidden])) { grid-template-columns: 1fr 1fr; }
 .btn small svg { width: 1.3em; height: 0.92em; margin-right: 0.3em; vertical-align: -0.12em; }
+.btn small .clap { font-size: 1.3em; line-height: 0; margin-right: 0.3em; vertical-align: -0.1em; }
 /* While an ad is asked for and shown, nothing under this can be pressed. */
 #veil {
   position: absolute;
@@ -582,6 +583,8 @@ h1 {
   opacity: 0.8;
 }
 .keys .also { opacity: 0.8; font-size: max(13px, calc(var(--u) * 14px)); }
+/* In a frame under 420 pixels tall the words under the pictures would run down under the card. */
+.low .keys .also { display: none; }
 /* In the margins the instructions and the goals have places of their own. */
 .wide #how, .wide #goals, .wide #over-goals { display: none; }
 .wide .fit { max-height: calc(var(--fh, 640px) - var(--u) * 300px); }
@@ -603,6 +606,8 @@ h1 {
 .wide #keys { top: calc(var(--u) * 22px); bottom: auto; padding-bottom: 0; }
 .wide[data-shown="wardrobe"] #keys, .wide[data-shown="over"] #keys { display: none; }
 .wide .lede[hidden], .wide[data-shown="over"] .lede, .wide[data-shown="pause"] .lede, .wide[data-shown="wardrobe"] .lede { display: none; }
+/* The wardrobe card stands tall enough to reach the line under the name. */
+.wide[data-shown="wardrobe"] .cue { display: none; }
 /* A hint left over from the climb would stand under the pause card, so it waits. */
 .wide[data-shown="pause"] #hint, .wide[data-shown="pause"] #coach { visibility: hidden; }
 
@@ -673,6 +678,10 @@ h1 {
   align-self: start;
   margin-top: calc(var(--u) * 14px);
 }
+
+/* In a frame under 420 pixels tall the card after a climb takes more of the width, so that four
+   buttons fit in a row without their words wrapping. */
+.wide .low #over { --card: min(calc(100vw - var(--u) * 40px), 560px); }
 
 /* Paused: a small card in the middle. */
 .wide #pause {
@@ -798,7 +807,7 @@ h1 {
       <p class="quiet" id="over-ad" hidden></p>
       <button id="btn-again" class="btn primary" type="button">Climb again</button>
       <div class="pair">
-        <button id="btn-ad" class="btn" type="button" hidden><span id="ad-for"></span><small><svg viewBox="0 0 20 14" aria-hidden="true"><rect x="1" y="1" width="18" height="12" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 4.2v5.6L13 7z" fill="currentColor"/></svg>Watch ad</small></button>
+        <button id="btn-ad" class="btn" type="button" hidden><span id="ad-for"></span><small><span class="clap" aria-hidden="true">🎬</span>Watch ad</small></button>
         <button id="btn-carry" class="btn" type="button" hidden>Carry on<small id="carry-note"></small></button>
         <button id="btn-share" class="btn" type="button" hidden>Share</button>
         <button id="btn-home" class="btn" type="button">Home</button>
@@ -1174,13 +1183,16 @@ function keepWithPortal() {
   }
 }
 
-// The site is told when a climb starts and when it stops, once for each change.
+// The site is told when a climb starts and when it stops, once for each change. Poki counts a
+// climb as under way from the player's first touch or key in it.
 function tellPortal(playing) {
-  if (!portal.sdk || portal.playing === playing) return;
-  portal.playing = playing;
+  const now = portal.poki ? playing && run.touched : playing;
+  if ((!portal.sdk && !portal.poki) || portal.playing === now) return;
+  portal.playing = now;
   try {
-    if (playing) portal.sdk.game.gameplayStart();
-    else portal.sdk.game.gameplayStop();
+    const game = portal.poki || portal.sdk.game;
+    if (now) game.gameplayStart();
+    else game.gameplayStop();
   } catch (err) {
     // The climb goes on whether or not the site hears of it.
   }
@@ -1256,6 +1268,9 @@ function watchAd(kind) {
 function adOffer() {
   if (portal.phone) {
     if (!portal.ads.ready('rewarded')) return '';
+  } else if (portal.poki) {
+    // Poki decides when ads are shown, so the offer is there on every sheet it suits.
+    if (!portal.ads) return '';
   } else {
     // A site that can say whether an ad is waiting is asked. Otherwise it has to have shown one.
     const ready = portal.ads && (portal.ads.ready ? portal.ads.ready('rewarded') : portal.proven);
@@ -1280,6 +1295,7 @@ function takeAdOffer() {
     portal.offer = '';
     $('btn-ad').hidden = true;
     portal.restUntil = performance.now() + (watched ? 180000 : 120000);
+    if (!watched && portal.why === 'quiet') return;
     if (!watched) {
       $('over-ad').textContent = portal.why === 'early'
         ? 'The ad was closed before its end, so nothing is given.'
@@ -1312,8 +1328,8 @@ function climbAgain(device) {
   if (portal.busy) return;
   const daily = run.daily;
   const now = performance.now();
-  const due = portal.ads && !portal.phone && !portal.off && !portal.offer && portal.sheets % 2 === 0 && portal.climbs >= 2
-    && now - portal.since > 120000 && now - portal.askedAt > 185000;
+  const due = (portal.poki && portal.ads) || (portal.ads && !portal.phone && !portal.off && !portal.offer
+    && portal.sheets % 2 === 0 && portal.climbs >= 2 && now - portal.since > 120000 && now - portal.askedAt > 185000);
   if (!due) {
     startRun(daily, device);
     return;
@@ -1402,6 +1418,44 @@ function meetGameDistribution() {
   tag.id = 'gamedistribution-jssdk';
   tag.src = 'https://html5.api.gamedistribution.com/main.min.js';
   document.head.appendChild(tag);
+}
+
+// ---- Poki ----
+// The copy made for Poki carries their code. The game tells it when it has loaded and when a climb
+// is under way, and asks it for a break before every climb the player chooses and on the way back
+// from a pause. Poki alone decides whether a break shows an ad, so the game keeps no clock of its
+// own for ads there. A reward is given only when Poki says the ad was watched, and when it was
+// not, nothing is said about it.
+function meetPoki() {
+  const sdk = window.PokiSDK;
+  if (!sdk || portal.ads) return;
+  const begin = () => {
+    portal.poki = sdk;
+    portal.ads = {
+      ready: () => true,
+      play: (kind, heard) => {
+        const started = () => heard.adStarted();
+        const asked = kind === 'rewarded' ? sdk.rewardedBreak(started) : sdk.commercialBreak(started);
+        const over = (code) => {
+          // Should the game have given up waiting before the ad began, the sound still comes back.
+          if (!portal.busy) {
+            portal.hush = false;
+            setGate();
+          }
+          if (code) heard.adError({ code });
+          else heard.adFinished();
+        };
+        Promise.resolve(asked).then((given) => over(kind === 'rewarded' && given !== true ? 'quiet' : ''), () => over('quiet'));
+      }
+    };
+    try {
+      sdk.gameLoadingFinished();
+    } catch (err) {
+      // Poki still has the game.
+    }
+  };
+  // The game plays whether or not Poki's code starts.
+  Promise.resolve().then(() => sdk.init()).then(begin, () => {});
 }
 
 // ---- the app on a phone ----
@@ -2903,8 +2957,9 @@ function startRun(daily, device) {
     // Where the last climb ended, whether this one has passed it, and when the string of lights
     // at the best was snapped.
     fell: daily ? 0 : save.fell, passed: false, snap: -1,
-    // Whether an ad has doubled what the climb picked.
-    doubled: false
+    // Whether an ad has doubled what the climb picked, and whether the player has touched a key,
+    // the mouse or the screen since it began.
+    doubled: false, touched: true
   };
   Object.assign(player, {
     x: W / 2, y: 0, vx: 0, vy: -BOUNCE, face: 1,
@@ -3322,6 +3377,7 @@ function stepOpening(dt) {
   opening.t += dt;
   if (opening.t >= OPENING) {
     startRun(false, pointer.kind);
+    run.touched = false;
     return;
   }
   let k = 0;
@@ -3493,12 +3549,16 @@ function pause() {
   $('btn-resume').focus({ preventScroll: true });
 }
 
+// On Poki the way back from a pause is a break too.
 function resume() {
-  if (state !== 'paused') return;
-  state = 'run';
-  show('hud');
-  if (steer === 'mouse') holdPointer();
-  document.activeElement.blur();
+  if (state !== 'paused' || portal.busy) return;
+  breakFirst(() => {
+    if (state !== 'paused') return;
+    state = 'run';
+    show('hud');
+    if (steer === 'mouse') holdPointer();
+    document.activeElement.blur();
+  });
 }
 
 function openWardrobe() {
@@ -3839,6 +3899,7 @@ function resize() {
   frameEl.style.setProperty('--fh', `${sh}px`);
   frameEl.style.setProperty('--side', `${view.left.toFixed(1)}px`);
   frameEl.classList.toggle('short', sh < 620);
+  frameEl.classList.toggle('low', sh < 420);
   stage.classList.toggle('wide', view.wide);
   if (shown) $('masthead').hidden = !named(shown);
   paintFinish();
@@ -3945,20 +4006,11 @@ stage.addEventListener('contextmenu', (e) => e.preventDefault());
 stage.addEventListener('pointerleave', (e) => {
   if (e.pointerType === 'mouse' && steer === 'mouse' && !pointer.locked && state === 'run') pause();
 });
-// The tour has no button: it is for looking over the backdrops, and players find the stages by
-// climbing to them. Five quick taps on the title start it, and any tap or click ends it. Both wait
-// for the click, so the tap cannot land on the menu beneath.
-const knock = { count: 0, at: 0 };
+// The tour of the backdrops is for looking them over while the game is made. Players find the
+// stages by climbing to them, so nothing in the game starts it. Any tap or click ends it, waiting
+// for the click so that the tap cannot land on the menu beneath.
 stage.addEventListener('click', (e) => {
-  if (state === 'tour' && !e.target.closest('button')) {
-    goHome();
-    return;
-  }
-  const name = document.querySelector('h1').getBoundingClientRect();
-  if (state !== 'title' || e.clientX < name.left || e.clientX > name.right || e.clientY < name.top || e.clientY > name.bottom) return;
-  knock.count = e.timeStamp - knock.at < 600 ? knock.count + 1 : 1;
-  knock.at = e.timeStamp;
-  if (knock.count === 5) startTour();
+  if (state === 'tour' && !e.target.closest('button')) goHome();
 });
 
 const PLAY_KEYS = ['Space', 'Enter', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'KeyA', 'KeyD', 'KeyW'];
@@ -4029,10 +4081,29 @@ function onPress(id, action) {
 // A held Space or a fast double tap must not restart the run before the result has been seen.
 const settled = () => performance.now() - overAt > 350;
 
+// The player's first touch, mouse movement or key in a climb, which Poki counts the climb from.
+const noticed = () => {
+  if (state === 'run') run.touched = true;
+};
+stage.addEventListener('pointerdown', noticed, true);
+stage.addEventListener('pointermove', noticed, true);
+window.addEventListener('keydown', noticed, true);
+
+// On Poki a climb the player chooses begins with a break, and Poki decides whether an ad fills it.
+// Everywhere else the climb simply begins.
+function breakFirst(then) {
+  if (!portal.poki || !portal.ads) {
+    then();
+    return;
+  }
+  watchAd('midgame').then(then);
+}
+
 onPress('btn-play', (e) => {
   if (state !== 'title') return;
   if (save.berries >= rideCost(save.from)) {
-    startRun(false, deviceOf(e));
+    const device = deviceOf(e);
+    breakFirst(() => state === 'title' && startRun(false, device));
     return;
   }
   // No berries for the ride: the button shakes its head and the climb does not start.
@@ -4042,10 +4113,13 @@ onPress('btn-play', (e) => {
   button.classList.add('lacking');
   sfx.nope();
 });
-onPress('btn-daily', (e) => startRun(true, deviceOf(e)));
+onPress('btn-daily', (e) => {
+  const device = deviceOf(e);
+  breakFirst(() => state === 'title' && startRun(true, device));
+});
 onPress('btn-again', (e) => settled() && climbAgain(deviceOf(e)));
 onPress('btn-ad', () => settled() && takeAdOffer());
-onPress('btn-carry', () => settled() && carryOn());
+onPress('btn-carry', () => settled() && breakFirst(() => carryOn()));
 onPress('btn-home', () => settled() && goHome());
 onPress('btn-quit', goHome);
 onPress('btn-pause', pause);
@@ -6471,6 +6545,7 @@ document.fonts.ready.then(findPerch);
 if (!save.plays && !save.opened) startOpening();
 meetPortal();
 meetGameDistribution();
+meetPoki();
 meetPhone();
 requestAnimationFrame(frame);
 </script>
