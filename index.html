@@ -2592,13 +2592,18 @@ function stepRun(dt) {
     player.vx = approach(player.vx, want, 300000 * dt);
     player.x += player.vx * dt;
   }
+  // Whatever the steering made of it, the climber stays somewhere on the field.
+  if (!Number.isFinite(player.x)) player.x = W / 2;
+  if (!Number.isFinite(player.vx)) player.vx = 0;
   // The sleigh keeps to the screen, and far enough back on it that its team does too. A climber
-  // on foot who goes off one side comes back on the other.
+  // on foot who goes off one side comes back on the other, however far over they went.
   if (player.sleigh) {
     const ahead = W / 2 + player.sleigh.face * 30;
     player.x = player.sleigh.face > 0 ? clamp(player.x, field.lo + 36, ahead) : clamp(player.x, ahead, field.hi - 36);
-  } else if (player.x < field.lo - 10) player.x += field.across + 20;
-  else if (player.x >= field.hi + 10) player.x -= field.across + 20;
+  } else if (player.x < field.lo - 10 || player.x >= field.hi + 10) {
+    const span = field.across + 20;
+    player.x = field.lo - 10 + ((((player.x - field.lo + 10) % span) + span) % span);
+  }
   if (Math.abs(player.vx) > 30) player.face = player.vx > 0 ? 1 : -1;
 
   const before = player.y;
@@ -3261,7 +3266,7 @@ function tallyToday(kind, by = 1) {
   today.count = Math.min(today.n, today.count + by);
   if (today.count < today.n) {
     if (Math.floor((4 * today.count) / today.n) > quarter && state === 'run') {
-      celebrate(`Today's goal: ${TODAY[kind].say(today.n)}, ${fmt(Math.floor(today.count))} so far`);
+      announce(`Today's goal: ${TODAY[kind].say(today.n)}, ${fmt(Math.floor(today.count))} so far`);
     }
     return;
   }
@@ -3269,7 +3274,7 @@ function tallyToday(kind, by = 1) {
   save.berries += today.pay;
   run.extra += today.pay;
   persist();
-  celebrate("Today's goal done", today.pay);
+  announce("Today's goal done", today.pay);
   sfx.gold();
   cheerPortal();
 }
@@ -3373,7 +3378,7 @@ function paintToday(list) {
 // to the purse. News that comes together takes its turn.
 const cheers = [];
 let cheering = false;
-function celebrate(text, pay = 0) {
+function announce(text, pay = 0) {
   cheers.push({ text, pay });
   if (!cheering) nextCheer();
 }
@@ -3902,10 +3907,19 @@ stage.addEventListener('pointerdown', (e) => {
   pointer.moved = 0;
 });
 
+// A held pointer reports how far the mouse has moved since the last report. Now and then a browser
+// reports a leap no hand made, as when screens are plugged in or taken out. A report that is not a
+// number, or is more than half the field, is taken as no movement at all.
+const reading = (dx) => (Number.isFinite(dx) && Math.abs(dx) < field.across / 2 ? dx : 0);
+
 stage.addEventListener('pointermove', (e) => {
   if (e.pointerType === 'mouse') {
-    if (pointer.locked) dragDx += e.movementX / view.scale;
-    else pointer.mouseX = fieldX(e);
+    if (pointer.locked) {
+      dragDx += reading(e.movementX / view.scale);
+    } else {
+      const x = fieldX(e);
+      if (Number.isFinite(x)) pointer.mouseX = x;
+    }
     return;
   }
   if (e.pointerId !== pointer.id) return;
@@ -6357,7 +6371,27 @@ function draw() {
   }
 }
 
+// The next frame is asked for before anything else, so that one which goes wrong cannot stop the
+// game. The first fault is thrown again outside the frame, where it is reported as any other would
+// be, and a climb under way is paused, to go on when the player says.
+let faulted = false;
+
 function frame(now) {
+  requestAnimationFrame(frame);
+  try {
+    runFrame(now);
+  } catch (err) {
+    if (!faulted) setTimeout(() => { throw err; });
+    faulted = true;
+    try {
+      pause();
+    } catch (again) {
+      // The next frame tries again.
+    }
+  }
+}
+
+function runFrame(now) {
   const dt = last ? Math.min(0.1, Math.max(0, (now - last) / 1000)) : 0;
   const camBefore = cam.y;
   last = now;
@@ -6423,7 +6457,6 @@ function frame(now) {
   }
 
   draw();
-  requestAnimationFrame(frame);
 }
 
 new ResizeObserver(resize).observe(stage);
