@@ -254,8 +254,6 @@ h1 {
 .pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: calc(var(--u) * 10px); }
 /* The sheet after a climb can have three buttons in its row, so they keep their words close. */
 #over .pair .btn { padding: 0 0.4em; }
-/* Four across leaves no room for their words, so four sit two by two. */
-#over .pair:has(> .btn:not([hidden]) ~ .btn:not([hidden]) ~ .btn:not([hidden]) ~ .btn:not([hidden])) { grid-template-columns: 1fr 1fr; }
 .btn small svg { width: 1.3em; height: 0.92em; margin-right: 0.3em; vertical-align: -0.12em; }
 .btn small .clap { font-size: 1.3em; line-height: 0; margin-right: 0.3em; vertical-align: -0.1em; }
 /* While an ad is asked for and shown, nothing under this can be pressed. */
@@ -667,12 +665,13 @@ h1 {
   line-height: 1.2;
 }
 .wide #over-goals .today { display: grid; justify-items: start; row-gap: calc(var(--u) * 4px); }
-.wide #btn-again { grid-column: 1 / 4; align-self: start; margin-top: calc(var(--u) * 14px); padding: 0 0.4em; }
-/* However many buttons there are beside it, they stand in one row. */
-.wide #over .pair,
-.wide #over .pair:has(> .btn:not([hidden]) ~ .btn:not([hidden]) ~ .btn:not([hidden]) ~ .btn:not([hidden])) {
+/* Climb again is the largest button on the sheet: as tall as anything beside it, and wider. */
+.wide #btn-again { grid-column: 1 / 4; align-self: stretch; margin: calc(var(--u) * 14px) 0 0; padding: 0 0.4em; }
+/* However many buttons there are beside it, they stand in one row, none of them in more than a
+   third of the room. */
+.wide #over .pair {
   grid-column: 4 / -1;
-  grid-template-columns: none;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   grid-auto-flow: column;
   grid-auto-columns: minmax(0, 1fr);
   align-self: start;
@@ -809,7 +808,6 @@ h1 {
       <div class="pair">
         <button id="btn-ad" class="btn" type="button" hidden><span id="ad-for"></span><small><span class="clap" aria-hidden="true">🎬</span>Watch ad</small></button>
         <button id="btn-carry" class="btn" type="button" hidden>Carry on<small id="carry-note"></small></button>
-        <button id="btn-share" class="btn" type="button" hidden>Share</button>
         <button id="btn-home" class="btn" type="button">Home</button>
       </div>
     </section>
@@ -1051,10 +1049,6 @@ const twistOf = (day) => {
   return TWISTS[(n * 3 + Math.floor(n / 7)) % TWISTS.length];
 };
 
-function dayLabel(key) {
-  return new Date(`${key}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
-}
-
 function loadSave() {
   const fresh = {
     best: 0, berries: 0, owned: [], hero: 'robin', scarf: 'no-scarf', hat: 'no-hat',
@@ -1063,14 +1057,21 @@ function loadSave() {
     // Presents in hand towards a sleigh ride, and the height at which the last climb ended.
     gifts: 0, fell: 0
   };
+  // On Playgama the save is kept by their code, which is not ready this early. It is laid over
+  // this one once that code has started.
+  if (window.bridge) return fresh;
   try {
-    const kept = JSON.parse(localStorage.getItem(SAVE_KEY));
-    // Heights from an older rule set are not comparable, so records restart when the rules change.
-    if (kept && kept.rules !== fresh.rules) Object.assign(kept, { best: 0, dayBest: 0, rules: fresh.rules });
-    return Object.assign(fresh, kept);
+    return layOver(fresh, JSON.parse(localStorage.getItem(SAVE_KEY)));
   } catch (err) {
     return fresh;
   }
+}
+
+// A kept save laid over the one in hand. Heights from an older rule set are not comparable, so
+// records restart when the rules change.
+function layOver(into, kept) {
+  if (kept && kept.rules !== into.rules) Object.assign(kept, { best: 0, dayBest: 0, rules: into.rules });
+  return Object.assign(into, kept);
 }
 
 const save = loadSave();
@@ -1078,8 +1079,11 @@ const save = loadSave();
 // climber and a second tap buys it.
 let fitting = null;
 // A save from before the stages were counted is credited with the ones its best climb passed.
-save.top = Math.max(save.top, stageAt(save.best));
-save.from = clamp(save.from, 0, Math.min(save.top, STAGES.length - 2));
+function settleSave() {
+  save.top = Math.max(save.top, stageAt(save.best));
+  save.from = clamp(save.from, 0, Math.min(save.top, STAGES.length - 2));
+}
+settleSave();
 const has = (piece) => piece.cost === 0 || save.owned.includes(piece.id);
 const climber = () => HEROES.find((hero) => hero.id === save.hero) || HEROES[0];
 
@@ -1095,6 +1099,8 @@ const kit = (id) => KIT.find((piece) => piece.id === id).steps[kitLevel(id)];
 // far more than that for the stages nearest the roof. It is a treat for a climber with berries to
 // burn, and never a sensible way up.
 const rideCost = (stage) => STAGES[stage].ride;
+// A ride takes longer the higher the stage it goes to.
+const rideSpan = (stage) => 2.5 + stage * 0.5;
 // What one berry counts for at the height the climber has reached.
 const worthNow = () => STAGES[stageAt(run.metres)].worth;
 // Carrying on after a fall costs half the berries the climb has picked, to the nearest ten, and
@@ -1105,6 +1111,10 @@ const startStage = () => (save.berries >= rideCost(save.from) ? save.from : 0);
 
 function persist() {
   const kept = JSON.stringify(save);
+  if (portal.keep) {
+    portal.keep(kept);
+    return;
+  }
   try {
     localStorage.setItem(SAVE_KEY, kept);
   } catch (err) {
@@ -1136,8 +1146,16 @@ const portal = {
   // when the last ad of either kind ended, why the last one gave nothing, and how many ads that
   // nobody chose this visit has had.
   ads: null, phone: false, lastAd: -Infinity, why: '', forced: 0,
+  // Whether the site itself decides how often its ads show. If it does, the game asks at every
+  // break and keeps no clock of its own for them.
+  paced: false,
   // What puts a second copy of the save in a phone's own store, when the game is an app.
-  stow: null
+  stow: null,
+  // Playgama's code, where the game is played there, what keeps the save there in place of the
+  // browser, and whether it, or GamePix's code, has paused the game.
+  bridge: null, keep: null, halted: false,
+  // GamePix's code, where the game is played there.
+  gamepix: null
 };
 
 function meetPortal() {
@@ -1162,8 +1180,7 @@ function meetPortal() {
 function adopt(theirs) {
   if (!theirs || theirs.rules !== save.rules || (theirs.plays || 0) <= save.plays) return;
   Object.assign(save, theirs);
-  save.top = Math.max(save.top, stageAt(save.best));
-  save.from = clamp(save.from, 0, Math.min(save.top, STAGES.length - 2));
+  settleSave();
   if (state === 'title') {
     paintTitle();
     paintSwitches();
@@ -1183,16 +1200,25 @@ function keepWithPortal() {
   }
 }
 
-// The site is told when a climb starts and when it stops, once for each change. Poki counts a
-// climb as under way from the player's first touch or key in it.
+// The site is told when a climb starts and when it stops, once for each change. Poki, Playgama and
+// GamePix count a climb as under way from the player's first touch or key in it, and GamePix
+// wants to hear only of the start.
 function tellPortal(playing) {
-  const now = portal.poki ? playing && run.touched : playing;
-  if ((!portal.sdk && !portal.poki) || portal.playing === now) return;
+  const first = portal.poki || portal.bridge || portal.gamepix;
+  const now = first ? playing && run.touched : playing;
+  if ((!portal.sdk && !first) || portal.playing === now) return;
   portal.playing = now;
   try {
-    const game = portal.poki || portal.sdk.game;
-    if (now) game.gameplayStart();
-    else game.gameplayStop();
+    const game = portal.poki || (portal.sdk && portal.sdk.game);
+    if (portal.bridge) {
+      portal.bridge.platform.sendMessage(now ? 'gameplay_started' : 'gameplay_stopped');
+    } else if (portal.gamepix) {
+      if (now) portal.gamepix.lifecycle.gameStart();
+    } else if (now) {
+      game.gameplayStart();
+    } else {
+      game.gameplayStop();
+    }
   } catch (err) {
     // The climb goes on whether or not the site hears of it.
   }
@@ -1203,6 +1229,8 @@ function tellPortal(playing) {
 function cheerPortal() {
   try {
     if (portal.sdk) portal.sdk.game.happytime();
+    if (portal.bridge) portal.bridge.platform.sendMessage('player_got_achievement');
+    if (portal.gamepix) portal.gamepix.happyMoment();
   } catch (err) {
     // The moment is no less for that.
   }
@@ -1218,10 +1246,10 @@ function heedPortal() {
   setGate();
 }
 
-// The gate that every sound goes out through is shut while the site asks for quiet and while an
-// ad is playing.
+// The gate that every sound goes out through is shut while the site asks for quiet, while it has
+// paused the game and while an ad is playing.
 function setGate() {
-  if (audio.out) audio.out.gain.value = portal.muted || portal.hush ? 0 : VOLUME;
+  if (audio.out) audio.out.gain.value = portal.muted || portal.halted || portal.hush ? 0 : VOLUME;
 }
 
 // Asks for an ad, of the site or of a phone's ad kit, and answers when it is over: true if it
@@ -1261,29 +1289,30 @@ function watchAd(kind) {
   });
 }
 
+// An ad watched for berries makes what the climb picked count this many times over.
+const BERRY_TIMES = 2;
+
 // What the sheet at the end of a climb offers for watching an ad: to carry on, after a climb
-// worth carrying on with, or else to double what the climb picked. On the site it is offered on
-// every other sheet at most, and not for three minutes after one has been watched. On a phone the
-// choice is the player's every time, so long as the kit has an ad ready to play.
+// worth carrying on with, or else more berries for what the climb picked. On CrazyGames it is
+// offered on every other sheet at most, and not for three minutes after one has been watched. On
+// a phone, and on a site that decides for itself how often its ads show, the choice is the
+// player's every time a reward is ready to play.
 function adOffer() {
-  if (portal.phone) {
-    if (!portal.ads.ready('rewarded')) return '';
-  } else if (portal.poki) {
-    // Poki decides when ads are shown, so the offer is there on every sheet it suits.
-    if (!portal.ads) return '';
+  if (portal.phone || portal.paced) {
+    if (portal.off || !portal.ads.ready('rewarded')) return '';
   } else {
     // A site that can say whether an ad is waiting is asked. Otherwise it has to have shown one.
     const ready = portal.ads && (portal.ads.ready ? portal.ads.ready('rewarded') : portal.proven);
     if (!ready || portal.off || portal.sheets % 2 === 0 || performance.now() < portal.restUntil) return '';
   }
   if (!run.daily && !run.carried && run.cause !== 'star' && run.metres >= Math.max(100, 0.6 * run.mark)) return 'carry';
-  return run.berries >= 20 && !run.doubled ? 'double' : '';
+  return run.berries >= 20 && !run.multiplied ? 'berries' : '';
 }
 
 function paintAdOffer() {
   portal.offer = adOffer();
   $('btn-ad').hidden = !portal.offer;
-  $('ad-for').textContent = portal.offer === 'carry' ? 'Carry on' : '2× berries';
+  $('ad-for').textContent = portal.offer === 'carry' ? 'Carry on' : `${BERRY_TIMES}× berries`;
   $('over-ad').hidden = true;
 }
 
@@ -1304,31 +1333,33 @@ function takeAdOffer() {
     } else if (offer === 'carry') {
       carryOn(true);
     } else {
-      doubleUp();
+      multiplyBerries();
     }
   });
 }
 
-// An ad watched to the end doubles what the climb picked.
-function doubleUp() {
-  if (state !== 'over' || run.doubled) return;
-  run.doubled = true;
-  save.berries += run.berries;
-  save.sum.berries += run.berries;
+// An ad watched to the end makes what the climb picked count BERRY_TIMES over.
+function multiplyBerries() {
+  if (state !== 'over' || run.multiplied) return;
+  run.multiplied = true;
+  const more = run.berries * (BERRY_TIMES - 1);
+  save.berries += more;
+  save.sum.berries += more;
   persist();
-  $('over-ad').textContent = `Doubled: ${fmt(run.berries)} more ${run.berries === 1 ? 'berry' : 'berries'}. You have ${fmt(save.berries)}.`;
+  $('over-ad').textContent = `${BERRY_TIMES}× berries: ${fmt(more)} more. You have ${fmt(save.berries)}.`;
   $('over-ad').hidden = false;
   sfx.gift();
 }
 
-// Climbing again from the sheet. Now and then the site's own ad comes first: never before the
-// second climb of a visit is over or in its first two minutes, never from a sheet that offered an
-// ad of the player's choosing, and never within three minutes of the last time one was asked for.
+// Climbing again from the sheet. On a site that decides how often its ads show, a break comes
+// first every time. On CrazyGames the site's own ad comes now and then: never before the second
+// climb of a visit is over or in its first two minutes, never from a sheet that offered an ad of
+// the player's choosing, and never within three minutes of the last time one was asked for.
 function climbAgain(device) {
   if (portal.busy) return;
   const daily = run.daily;
   const now = performance.now();
-  const due = (portal.poki && portal.ads) || (portal.ads && !portal.phone && !portal.off && !portal.offer
+  const due = (portal.paced && !portal.off) || (portal.ads && !portal.phone && !portal.off && !portal.offer
     && portal.sheets % 2 === 0 && portal.climbs >= 2 && now - portal.since > 120000 && now - portal.askedAt > 185000);
   if (!due) {
     startRun(daily, device);
@@ -1350,10 +1381,11 @@ function forcedDue(goodNews) {
 
 // ---- GameDistribution ----
 // There the game is played inside many other sites, and its ads come through GameDistribution's
-// own code, fetched once as the page opens. Their rules: an ad only after a press, never during a
-// climb, and the game paused and silent while one plays. A reward is given only when they say the
-// ad was watched to the end. The copy made for them writes the game's ID here. Everywhere else it
-// is empty, and none of this runs.
+// own code, fetched once as the page opens. Their rules: an ad before the first climb and between
+// climbs, only after a press, never during one, and the game paused and silent while it plays.
+// Their code decides how often an ad shows, so the game asks before every climb the player
+// chooses. A reward is given only when they say the ad was watched to the end. The copy made for
+// them writes the game's ID here. Everywhere else it is empty, and none of this runs.
 const GAMEDISTRIBUTION = '';
 
 function meetGameDistribution() {
@@ -1386,6 +1418,7 @@ function meetGameDistribution() {
       }
     }
   };
+  portal.paced = true;
   portal.ads = {
     ready: (kind) => kind !== 'rewarded' || gd.ready,
     play: (kind, heard) => {
@@ -1410,7 +1443,7 @@ function meetGameDistribution() {
       // Word that a reward was earned can come a moment after the ad is over, so it is waited for.
       Promise.resolve(asked).then(
         () => setTimeout(() => settle(kind === 'rewarded' && !gd.watched ? 'early' : ''), 250),
-        (err) => settle(/block/i.test(String(err && err.message ? err.message : err)) ? 'adblock' : 'unfilled')
+        (err) => settle(/ad ?block/i.test(String(err && err.message ? err.message : err)) ? 'adblock' : 'unfilled')
       );
     }
   };
@@ -1431,6 +1464,7 @@ function meetPoki() {
   if (!sdk || portal.ads) return;
   const begin = () => {
     portal.poki = sdk;
+    portal.paced = true;
     portal.ads = {
       ready: () => true,
       play: (kind, heard) => {
@@ -1458,6 +1492,147 @@ function meetPoki() {
   Promise.resolve().then(() => sdk.init()).then(begin, () => {});
 }
 
+// ---- Playgama ----
+// The copy made for Playgama carries their code, which has to be ready before anything of the
+// game starts. Their code keeps the save, in place of the browser: it is read once as the game
+// starts, and written when a climb ends or something is bought or changed, not with every berry.
+// Their code is told when the game can be played and when a climb is under way, and asked for a
+// break before every climb the player chooses and on the way back from a pause. It decides whether
+// an ad fills one, so the game keeps no clock of its own there. A reward is given only when it says
+// the ad was watched. It can silence the game and pause it, as when the player goes to another
+// tab, and the game does as it says.
+function meetPlaygama() {
+  const bridge = window.bridge;
+  return Promise.resolve()
+    .then(() => bridge.initialize())
+    .then(() => {
+      portal.bridge = bridge;
+      portal.paced = true;
+      portal.muted = !bridge.platform.isAudioEnabled;
+      portal.halted = bridge.advertisement.interstitialState === 'opened';
+      const said = bridge.EVENT_NAME;
+      bridge.platform.on(said.AUDIO_STATE_CHANGED, (on) => {
+        portal.muted = !on;
+        setGate();
+      });
+      bridge.platform.on(said.PAUSE_STATE_CHANGED, (paused) => {
+        portal.halted = paused;
+        setGate();
+        if (paused) pause();
+      });
+      // Their code says how each ad goes: loading, opened, then closed or failed, and for a
+      // rewarded one, rewarded once it has been watched far enough.
+      const waiting = { midgame: null, rewarded: null };
+      const follow = (kind) => (now) => {
+        const ask = waiting[kind];
+        if (!ask) return;
+        if (now === 'opened') {
+          ask.heard.adStarted();
+        } else if (now === 'rewarded') {
+          ask.earned = true;
+        } else if (now === 'failed') {
+          waiting[kind] = null;
+          ask.heard.adError({ code: 'quiet' });
+        } else if (now === 'closed') {
+          // Word that a reward was earned can come a moment after the ad is closed, so it is
+          // waited for.
+          setTimeout(() => {
+            if (waiting[kind] !== ask) return;
+            waiting[kind] = null;
+            if (kind === 'rewarded' && !ask.earned) ask.heard.adError({ code: 'quiet' });
+            else ask.heard.adFinished();
+          }, kind === 'rewarded' ? 250 : 0);
+        }
+      };
+      bridge.advertisement.on(said.INTERSTITIAL_STATE_CHANGED, follow('midgame'));
+      bridge.advertisement.on(said.REWARDED_STATE_CHANGED, follow('rewarded'));
+      portal.ads = {
+        ready: (kind) => (kind === 'rewarded' ? bridge.advertisement.isRewardedSupported : bridge.advertisement.isInterstitialSupported),
+        play: (kind, heard) => {
+          waiting[kind] = { heard, earned: false };
+          if (kind === 'rewarded') bridge.advertisement.showRewarded();
+          else bridge.advertisement.showInterstitial();
+        }
+      };
+      return bridge.storage.get([SAVE_KEY]).then((found) => {
+        const kept = found && found[0];
+        layOver(save, typeof kept === 'string' ? JSON.parse(kept) : kept);
+        settleSave();
+      }).catch(() => {
+        // A save that cannot be read leaves a fresh one.
+      }).then(keepWithPlaygama);
+    })
+    // Without their code the game plays on as it does anywhere else.
+    .catch(() => {});
+}
+
+// During a climb the save changes with every berry, so there it is written once the climb is
+// over, and straight away if the page is put away.
+function keepWithPlaygama() {
+  let waiting = '';
+  const write = () => {
+    if (!waiting) return;
+    const kept = waiting;
+    waiting = '';
+    Promise.resolve().then(() => portal.bridge.storage.set([SAVE_KEY], [kept])).catch(() => {});
+  };
+  portal.keep = (kept) => {
+    waiting = kept;
+    if (state !== 'run') write();
+  };
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) write();
+  });
+}
+
+// ---- GamePix ----
+// The copy made for GamePix carries their code. The game tells it once it can be shown and when
+// play first begins, and asks it for a break before every climb the player chooses and on the way
+// back from a pause. Their code decides whether an ad fills one, so the game keeps no clock of its
+// own there. It pauses and silences the game around its ads and whenever else it needs to, and the
+// game does as it says. A reward is given only when it says the ad was watched. The save stays in
+// the browser's store, which their code keeps in step for itself.
+function meetGamePix() {
+  const sdk = window.GamePix;
+  if (!sdk || portal.ads) return;
+  portal.gamepix = sdk;
+  let waiting = null;
+  sdk.events.on('pause', () => {
+    portal.halted = true;
+    setGate();
+    pause();
+    if (waiting) waiting.adStarted();
+  });
+  sdk.events.on('resume', () => {
+    portal.halted = false;
+    setGate();
+  });
+  // Their code is told the game can be shown once its first picture is on the screen, and asks
+  // for no ads until then.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    Promise.resolve()
+      .then(() => sdk.lifecycle.loaded())
+      .then(() => {
+        portal.paced = true;
+        portal.ads = {
+          ready: () => true,
+          play: (kind, heard) => {
+            waiting = heard;
+            const asked = kind === 'rewarded' ? sdk.ads.reward() : sdk.ads.interstitial();
+            const over = (answer) => {
+              waiting = null;
+              if (answer && answer.success) heard.adFinished();
+              else heard.adError({ code: 'quiet' });
+            };
+            Promise.resolve(asked).then(over, () => over(null));
+          }
+        };
+      })
+      // Without their code the game plays on as it does anywhere else.
+      .catch(() => {});
+  }));
+}
+
 // ---- the app on a phone ----
 // As an app the game has no site around it, and its ads come through Google's ad kit, which the
 // app carries. The kit has to fetch an ad before it can show it, so one of each kind is kept
@@ -1478,9 +1653,8 @@ const phone = {
   // What the player has still to be asked: Google's form, Apple's question, both or neither. Then
   // whether the asking is under way, and when the app was last put away.
   form: false, follow: false, asking: false, leftAt: 0,
-  // Whether the app can put Apple's question about a rating, pass a result on through the
-  // phone's own sheet, and tap the hand that holds it.
-  rates: false, shares: false, buzzes: false
+  // Whether the app can put Apple's question about a rating, and tap the hand that holds it.
+  rates: false, buzzes: false
 };
 const askKit = (what, how) => phone.kit.nativePromise('AdMob', what, how || {});
 
@@ -1490,7 +1664,6 @@ function meetPhone() {
   const carries = (name) => (kit.PluginHeaders || []).some((plugin) => plugin.name === name);
   phone.kit = kit;
   phone.rates = carries('InAppReview');
-  phone.shares = carries('Share');
   phone.buzzes = carries('Haptics');
   document.querySelector('.plain[data-switch="buzz"]').hidden = !phone.buzzes;
   if (carries('Preferences')) keepOnPhone();
@@ -1720,7 +1893,7 @@ function wakeAudio() {
       const Ctx = window.AudioContext || window.webkitAudioContext;
       audio.ctx = new Ctx();
       audio.out = audio.ctx.createGain();
-      audio.out.gain.value = portal.muted || portal.hush ? 0 : VOLUME;
+      setGate();
       audio.out.connect(audio.ctx.destination);
       audio.master = audio.ctx.createGain();
       audio.master.gain.value = 0.22;
@@ -1730,7 +1903,7 @@ function wakeAudio() {
       audio.fault = '';
       Object.assign(bells, { ringing: false, scene: 'off', level: 0 });
       try {
-        Object.assign(audio, bellsRig(audio.ctx, audio.out));
+        Object.assign(audio, (RECORDED ? recordedRig : bellsRig)(audio.ctx, audio.out));
       } catch (err) {
         // The effects still play if the bells cannot be built.
         audio.fault = err.name;
@@ -1789,6 +1962,10 @@ function hiss(dur, vol) {
 // its pitch rising with the speed.
 function rush(dur, vol = 0.16) {
   if (!save.sound || !audio.ctx) return;
+  if (RECORDED) {
+    playRecorded([`rush-${Math.round(dur * 10)}`]);
+    return;
+  }
   const now = audio.ctx.currentTime;
   const length = Math.floor(audio.ctx.sampleRate * dur);
   const buffer = audio.ctx.createBuffer(1, length, audio.ctx.sampleRate);
@@ -2171,7 +2348,8 @@ function strikeUp(from) {
   const now = audio.ctx.currentTime;
   bells.count = from;
   bells.origin = now + 0.12 - from * BEAT;
-  retake(now);
+  if (RECORDED) stopBand(now);
+  else retake(now);
 }
 
 // For a climb that has just beaten the best, the band jumps to the last four bars of the tune.
@@ -2217,6 +2395,10 @@ function playBells() {
     audio.band.gain.setTargetAtTime(level ? BAND_LEVEL : 0, now, level ? 0.05 : 0.15);
   }
   bells.ringing = open;
+  if (RECORDED) {
+    keepBand(now, scene);
+    return;
+  }
   if (!open) return;
   // After a stall, such as a hidden tab or a pause, the beat is picked up from now with no catching up.
   const due = Math.ceil((now - 0.1 - bells.origin) / BEAT);
@@ -2226,6 +2408,130 @@ function playBells() {
     strike(bells.count, bells.origin + bells.count * BEAT);
     bells.count++;
   }
+}
+
+// ---- the sound, recorded ----
+// Some sites take sound only as recordings. The copy made for one of them carries every effect and
+// both parts of the band recorded to files, made by the synth above playing the game's own score
+// (scripts/record_sounds.mjs), and plays those in place of making the sound as it goes. That copy
+// names the folder they are in here. Everywhere else it is empty, and none of this runs.
+const RECORDED = '';
+// The band and the sleigh bells are each one recording of both times round the tune. It begins
+// two bars early, so that the last notes of a turn ring on over its start, and runs on past its
+// end. The bells were recorded at half their strength, to leave room for shakes that overlap.
+const RECORDED_LEAD = 8 * BEAT;
+const RECORDED_ROUND = TURN * 2 * BEAT;
+const BELLS_RECORDED_AT = 0.5;
+const recorded = { files: {}, sounds: {}, band: null, bells: null };
+
+// Every recording the game can ask for, by name: the effects, a berry for each note of the tune,
+// the wind of each ride and of the sleigh, and the band and its bells.
+function recordings() {
+  const effects = Object.keys(sfx).filter((name) => name !== 'berry' && name !== 'ride');
+  const notes = new Set(BERRY_NOTES.map((hz) => `berry-${Math.round(hz)}`));
+  const rides = Array.from({ length: STAGES.length - 2 }, (_, i) => `rush-${Math.round(rideSpan(i + 1) * 10)}`);
+  return [...effects, ...notes, ...rides, `rush-${Math.round(SLEIGH_SPAN * 10)}`, 'band', 'bells'];
+}
+
+// The files are fetched as the page opens, and made ready to play once there is sound to play
+// them on.
+function fetchRecordings() {
+  for (const name of recordings()) {
+    recorded.files[name] = fetch(`${RECORDED}${name}.mp3`).then((answer) => answer.arrayBuffer()).catch(() => null);
+  }
+}
+
+// In place of the synth, the two channels the band's recordings play through.
+function recordedRig(ctx, out) {
+  const fader = ctx.createGain();
+  fader.gain.value = 0;
+  fader.connect(out);
+  const band = ctx.createGain();
+  band.gain.value = 0;
+  band.connect(out);
+  Object.assign(recorded, { sounds: {}, band: null, bells: null });
+  for (const [name, file] of Object.entries(recorded.files)) {
+    file
+      .then((data) => data && ctx.decodeAudioData(data.slice(0)))
+      .then((sound) => {
+        if (sound && audio.ctx === ctx) recorded.sounds[name] = sound;
+      })
+      .catch(() => {});
+  }
+  return { fader, band, jingles: null, echo: null, reed: null, waver: null, noise: null, take: null, air: null };
+}
+
+// The recording for an effect: a berry by the note it plays, and a ride by how long it lasts.
+function recordingFor(name, args) {
+  if (name === 'berry') return [`berry-${Math.round(args[1] || BERRY_NOTES[args[0] % BERRY_NOTES.length])}`];
+  if (name === 'ride') return ['lift', `rush-${Math.round(args[0] * 10)}`];
+  return [name];
+}
+
+// The effects were recorded through their own channel, so they go straight to the gate.
+function playRecorded(names) {
+  if (!save.sound || !audio.ctx) return;
+  for (const name of names) {
+    const sound = recorded.sounds[name];
+    if (!sound) continue;
+    const source = audio.ctx.createBufferSource();
+    source.buffer = sound;
+    source.connect(audio.out);
+    source.start();
+  }
+}
+
+// The band and its bells set going together at the beat the tune is on, and round and round from
+// there. They play on unheard while the game is paused, as the synth's beat does.
+function startBand(now) {
+  const band = recorded.sounds.band;
+  const ring = recorded.sounds.bells;
+  if (!band || !ring) return;
+  const at = Math.max(now + 0.05, bells.origin);
+  const into = (((at - bells.origin) % RECORDED_ROUND) + RECORDED_ROUND) % RECORDED_ROUND;
+  const part = (sound, out) => {
+    const source = audio.ctx.createBufferSource();
+    const gain = audio.ctx.createGain();
+    source.buffer = sound;
+    source.loop = true;
+    source.loopStart = RECORDED_LEAD;
+    source.loopEnd = RECORDED_LEAD + RECORDED_ROUND;
+    source.connect(gain).connect(out);
+    source.start(at, RECORDED_LEAD + into);
+    return { source, gain };
+  };
+  recorded.band = part(band, audio.band);
+  recorded.bells = part(ring, audio.fader);
+  recorded.bells.gain.gain.value = 1 / BELLS_RECORDED_AT;
+}
+
+// A fresh start lets the old pair fade out.
+function stopBand(now) {
+  for (const part of [recorded.band, recorded.bells]) {
+    if (!part) continue;
+    part.gain.gain.setTargetAtTime(0, now, 0.03);
+    part.source.stop(now + 0.6);
+  }
+  recorded.band = null;
+  recorded.bells = null;
+}
+
+// Runs every frame in place of the synth's beat. The bells swell as the sleigh crosses the moon.
+function keepBand(now, scene) {
+  if (scene === 'off') {
+    stopBand(now);
+    return;
+  }
+  if (!recorded.band) startBand(now);
+  if (!recorded.bells) return;
+  const pass = sleighPass();
+  const near = pass < 0 ? 0 : Math.sin(pass * Math.PI);
+  recorded.bells.gain.gain.setTargetAtTime((0.7 + 0.3 * near) / BELLS_RECORDED_AT, now, 0.1);
+}
+
+if (RECORDED) {
+  for (const name of Object.keys(sfx)) sfx[name] = (...args) => playRecorded(recordingFor(name, args));
+  fetchRecordings();
 }
 
 // Every climb starts on the roof. One that rides up to a stage is set down on a wide ledge at that
@@ -2957,15 +3263,15 @@ function startRun(daily, device) {
     // Where the last climb ended, whether this one has passed it, and when the string of lights
     // at the best was snapped.
     fell: daily ? 0 : save.fell, passed: false, snap: -1,
-    // Whether an ad has doubled what the climb picked, and whether the player has touched a key,
+    // Whether an ad has multiplied what the climb picked, and whether the player has touched a key,
     // the mouse or the screen since it began.
-    doubled: false, touched: true
+    multiplied: false, touched: true
   };
   Object.assign(player, {
     x: W / 2, y: 0, vx: 0, vy: -BOUNCE, face: 1,
     flapped: false, lift: 0, guard: 0, pull: 0, globe: 0, squash: 1, wing: 0, spin: 0, frozen: false,
     // The further the ride, the longer it takes: three seconds to open sky, six and a half to the comet.
-    ride: from ? { top: -base * 10 - 46, t: 0, span: 2.5 + from * 0.5 } : null,
+    ride: from ? { top: -base * 10 - 46, t: 0, span: rideSpan(from) } : null,
     sleigh: null
   });
   cam.y = -view.h * rest.title;
@@ -3052,8 +3358,6 @@ function endRun() {
   const want = shelf().find((piece) => piece.cost > save.berries);
   const reach = want ? `, ${fmt(want.cost - save.berries)} short of the ${want.label}.` : '.';
   $('over-berries').textContent = `Picked ${fmt(run.berries)} ${run.berries === 1 ? 'berry' : 'berries'}${run.extra ? `, plus ${fmt(run.extra)} for today's goal` : ''}. You have ${fmt(save.berries)}${reach}`;
-  // A result can be passed on from the app, which has the phone's own sheet for it.
-  $('btn-share').hidden = !phone.shares;
   // A second chance, once a climb. Not at the star, and not in the daily climb, which has to be
   // the same for everyone.
   const price = carryCost();
@@ -3549,7 +3853,7 @@ function pause() {
   $('btn-resume').focus({ preventScroll: true });
 }
 
-// On Poki the way back from a pause is a break too.
+// Where a site decides how often its ads show, the way back from a pause is a break too.
 function resume() {
   if (state !== 'paused' || portal.busy) return;
   breakFirst(() => {
@@ -3610,22 +3914,6 @@ function choose(slot, piece) {
   const button = $(`wear-${piece.id}`);
   button.classList.toggle('lacking', lacking);
   button.focus({ preventScroll: true });
-}
-
-// Where the app can be had, which goes on the end of a result that is shared. It stays empty until
-// the app is in the App Store.
-const HOME = { app: '' };
-
-function shareResult() {
-  let text = `Rooftop Robin daily climb, ${dayLabel(run.day)} (${run.twist.name}): ${run.metres} m. Can you get higher?`;
-  if (!run.daily) {
-    text = run.cause === 'star'
-      ? 'Rooftop Robin: all the way up to the Christmas star. Can you get there?'
-      : `Rooftop Robin: ${run.metres} m up from the rooftops. Can you get higher?`;
-  }
-  if (!phone.shares) return;
-  // The phone's own sheet does the passing on. Putting it away again is no fault.
-  phone.kit.nativePromise('Share', 'share', HOME.app ? { text, url: HOME.app } : { text }).catch(() => {});
 }
 
 function flip(what) {
@@ -3742,7 +4030,7 @@ function paintKeys() {
   if (device === keysFor) return;
   keysFor = device;
   const also = { mouse: 'Or arrow keys and Space.', keys: 'Or the mouse.', touch: '' }[device];
-  $('keys').innerHTML = pictures(device) + (also ? `<p class="also">${also}</p><p class="also">P or Esc pauses.</p>` : '');
+  $('keys').innerHTML = pictures(device) + (also ? `<p class="also">${also}</p><p class="also">${portal.bridge ? 'P pauses.' : 'P or Esc pauses.'}</p>` : '');
 }
 
 // The presents in hand towards a sleigh ride. They do not count in the daily climb, so it has none.
@@ -4036,9 +4324,10 @@ window.addEventListener('keydown', (e) => {
     goHome();
     return;
   }
-  // P pauses, and so does Escape, as players expect. In full screen the browser keeps Escape for
-  // leaving it, and the climb pauses then because its frame changes width.
-  if (key === 'KeyP' || key === 'Escape') {
+  // P pauses, and so does Escape, as players expect, except on Playgama, whose rules leave Escape
+  // to the browser. In full screen the browser keeps Escape for leaving it, and the climb pauses
+  // then because its frame changes width.
+  if (key === 'KeyP' || (key === 'Escape' && !portal.bridge)) {
     if (state === 'run') pause();
     else if (state === 'paused') resume();
     return;
@@ -4064,7 +4353,12 @@ window.addEventListener('keyup', (e) => {
   if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = false;
 });
 
-window.addEventListener('blur', pause);
+// A climb pauses when the game's window loses the focus, and when the page is hidden. GamePix's
+// rules want it paused only when the page is hidden, as a click on their page beside the game
+// takes the focus too.
+window.addEventListener('blur', () => {
+  if (!portal.gamepix) pause();
+});
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) pause();
 });
@@ -4089,10 +4383,10 @@ stage.addEventListener('pointerdown', noticed, true);
 stage.addEventListener('pointermove', noticed, true);
 window.addEventListener('keydown', noticed, true);
 
-// On Poki a climb the player chooses begins with a break, and Poki decides whether an ad fills it.
-// Everywhere else the climb simply begins.
+// On a site that decides how often its ads show, a climb the player chooses begins with a break,
+// and the site decides whether an ad fills it. Everywhere else the climb simply begins.
 function breakFirst(then) {
-  if (!portal.poki || !portal.ads) {
+  if (!portal.paced || portal.off) {
     then();
     return;
   }
@@ -4126,7 +4420,6 @@ onPress('btn-pause', pause);
 onPress('btn-resume', resume);
 onPress('btn-wardrobe', openWardrobe);
 onPress('btn-done', closeWardrobe);
-onPress('btn-share', shareResult);
 // Where the law gives the player a way back to what they answered about ads, this is it.
 onPress('btn-choices', () => askKit('showPrivacyOptionsForm').catch(() => {}));
 onPress('from-down', () => stepStart(-1));
@@ -6533,21 +6826,38 @@ function runFrame(now) {
   draw();
 }
 
-new ResizeObserver(resize).observe(stage);
-// Whoever is holding a phone is told about fingers, not mice and keys.
-if (press === 'Tap') $('how').textContent = HINTS.touch;
-paintTitle();
-paintSwitches();
-resize();
-world = newWorld(1);
-cam.y = -view.h * rest.title;
-document.fonts.ready.then(findPerch);
-if (!save.plays && !save.opened) startOpening();
-meetPortal();
-meetGameDistribution();
-meetPoki();
-meetPhone();
-requestAnimationFrame(frame);
+function begin() {
+  new ResizeObserver(resize).observe(stage);
+  // Whoever is holding a phone is told about fingers, not mice and keys.
+  if (press === 'Tap') $('how').textContent = HINTS.touch;
+  paintTitle();
+  paintSwitches();
+  resize();
+  world = newWorld(1);
+  cam.y = -view.h * rest.title;
+  document.fonts.ready.then(findPerch);
+  if (!save.plays && !save.opened) startOpening();
+  meetPortal();
+  meetGameDistribution();
+  meetPoki();
+  meetGamePix();
+  meetPhone();
+  requestAnimationFrame(frame);
+  // Playgama is told that the game can be played once its first picture is on the screen.
+  if (portal.bridge) {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      try {
+        portal.bridge.platform.sendMessage('game_ready');
+      } catch (err) {
+        // The game plays on.
+      }
+    }));
+  }
+}
+
+// On Playgama the game waits for their code to be ready before it starts, as their rules ask.
+if (window.bridge) meetPlaygama().then(begin);
+else begin();
 </script>
 </body>
 </html>
