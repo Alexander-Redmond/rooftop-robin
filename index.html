@@ -1663,6 +1663,13 @@ function meetPhone() {
   if (!kit || !kit.isNativePlatform || !kit.isNativePlatform()) return;
   const carries = (name) => (kit.PluginHeaders || []).some((plugin) => plugin.name === name);
   phone.kit = kit;
+  // Apple wants the privacy page a tap away in the app, so its pause sheet has a link to it.
+  const privacy = document.createElement('a');
+  Object.assign(privacy, {
+    className: 'plain', href: 'https://alexander-redmond.github.io/rooftop-robin/privacy.html',
+    target: '_blank', rel: 'noopener', textContent: 'Privacy'
+  });
+  $('pause').append(privacy);
   phone.rates = carries('InAppReview');
   phone.buzzes = carries('Haptics');
   document.querySelector('.plain[data-switch="buzz"]').hidden = !phone.buzzes;
@@ -2559,6 +2566,24 @@ function newWorld(seed, base = 0, twist = PLAIN) {
   };
 }
 
+// Two ledges clash when one would be drawn on or just over the other, or when one drifts and the
+// other keeps still at its height, so that sooner or later the cloud would sail through it. A cloud
+// hangs well below its top. Clouds drifting past one another are left to it.
+function clash(a, b) {
+  const [upper, lower] = a.y < b.y ? [a, b] : [b, a];
+  const dy = lower.y - upper.y;
+  if (!upper.vx !== !lower.vx) return dy < (upper.type === 'cloud' || upper.type === 'storm' ? 0.4 * upper.w + 16 : 22);
+  return !upper.vx && dy < 30 && Math.abs(a.x - b.x) < (a.w + b.w) / 2 + 10;
+}
+
+// Whether a ledge aside from the way up has room where it would go.
+function roomFor(w, ledge) {
+  for (let i = w.plats.length - 1; i >= 0 && w.plats[i].y < ledge.y + 240; i--) {
+    if (clash(w.plats[i], ledge)) return false;
+  }
+  return true;
+}
+
 // Every row adds one ledge within hopping range of the last, so the course is always climbable.
 function extendWorld(w, untilY) {
   const rand = w.rand;
@@ -2605,6 +2630,14 @@ function extendWorld(w, untilY) {
         if (rand() < 0.6) ledge.vx *= 0.3;
       }
     }
+    // The ledge on the way up always stays. A ledge aside that is in its way gives up its place,
+    // and the berry over it goes with it.
+    for (let i = w.plats.length - 1; i >= 0 && w.plats[i].y < y + 240; i--) {
+      const old = w.plats[i];
+      if (!old.aside || !clash(old, ledge)) continue;
+      w.plats.splice(i, 1);
+      if (w.items.includes(old.berry)) w.items.splice(w.items.indexOf(old.berry), 1);
+    }
     w.plats.push(ledge);
 
     // Berries are scarce by the rooftops and thicker higher up, and each is worth more in every
@@ -2633,12 +2666,12 @@ function extendWorld(w, untilY) {
       const spareX = clamp(field.lo + ((x - field.lo + 120 + rand() * 180) % field.across), field.lo + 46, field.hi - 46);
       const spare = {
         type: climbed > (soft ? 3000 : 900) && rand() < 0.3 ? 'ice' : 'snow',
-        x: spareX, y: y + gap * (0.3 + rand() * 0.4), w: 58 + rand() * 16, vx: 0, alive: true, dip: 0
+        x: spareX, y: y + gap * (0.3 + rand() * 0.4), w: 58 + rand() * 16, vx: 0, alive: true, dip: 0, aside: true
       };
       if (zone.cloudy) Object.assign(spare, { type: 'cloud', w: spare.w + 16, vx: (rand() < 0.5 ? -1 : 1) * (10 + rand() * 16) });
       if (twist.ledge) Object.assign(spare, { type: twist.ledge, vx: twist.ledge === 'cloud' ? (rand() < 0.5 ? -1 : 1) * (20 + rand() * 40) : 0 });
       spare.w *= twist.narrow || 1;
-      if (Math.abs(spareX - x) > 80) w.plats.push(spare);
+      if (Math.abs(spareX - x) > 80 && roomFor(w, spare)) w.plats.push(spare);
     }
 
     // A wide playfield has another ledge in most rows, well off to one side, and sometimes a
@@ -2648,13 +2681,17 @@ function extendWorld(w, untilY) {
       const farX = clamp(field.lo + ((x - field.lo + field.across * (0.3 + rand() * 0.4)) % field.across), field.lo + 46, field.hi - 46);
       const far = {
         type: climbed > (soft ? 3000 : 900) && rand() < 0.3 ? 'ice' : 'snow',
-        x: farX, y: y + gap * (rand() - 0.5) * 0.8, w: 60 + rand() * 18, vx: 0, alive: true, dip: 0
+        x: farX, y: y + gap * (rand() - 0.5) * 0.8, w: 60 + rand() * 18, vx: 0, alive: true, dip: 0, aside: true
       };
       if (zone.cloudy) Object.assign(far, { type: 'cloud', w: far.w + 16, vx: (rand() < 0.5 ? -1 : 1) * (10 + rand() * 30) });
       if (twist.ledge) Object.assign(far, { type: twist.ledge, vx: twist.ledge === 'cloud' ? (rand() < 0.5 ? -1 : 1) * (20 + rand() * 40) : 0 });
       far.w *= twist.narrow || 1;
-      w.plats.push(far);
-      if (rand() < 0.3) w.items.push({ kind: 'berry', worth: zone.worth, x: farX, y: far.y - 34, bob: rand() * TAU });
+      const room = roomFor(w, far);
+      if (room) w.plats.push(far);
+      if (rand() < 0.3) {
+        const berry = { kind: 'berry', worth: zone.worth, x: farX, y: far.y - 34, bob: rand() * TAU };
+        if (room) w.items.push(far.berry = berry);
+      }
     }
 
     if (y < w.frostAt && (rand() < lerp(0.06, 0.17, t) * (twist.foes || 1) || (w.gentle && !w.met))) {
@@ -4177,7 +4214,9 @@ function resize() {
   view.sw = sw;
   view.sh = sh;
   view.left = (sw - W * view.scale) / 2;
-  const across = view.wide ? Math.min(sw / view.scale, 900) : W;
+  // The playfield runs from one side of the frame to the other, up to 900 across, whatever its
+  // shape, so that a squarer window has no dark strips beside the climb.
+  const across = Math.max(W, Math.min(sw / view.scale, 900));
   if (across !== field.across) {
     Object.assign(field, { lo: (W - across) / 2, hi: (W + across) / 2, across });
     for (const f of flakes) f.x = field.lo + Math.random() * across;
@@ -6725,7 +6764,7 @@ function draw() {
   g.restore();
   // Behind a menu a wide frame darkens towards its edges, where the words stand, and a little all
   // over behind any menu but the home screen. Nothing marks where a phone's screen would end.
-  if (field.lo < 0 && dim > 0.01) {
+  if (view.wide && dim > 0.01) {
     const over = 0.4 * wash;
     const tone = (a) => `rgba(6, 20, 26, ${(dim * Math.min(0.85, a)).toFixed(3)})`;
     const shade = g.createLinearGradient(0, 0, view.sw, 0);
